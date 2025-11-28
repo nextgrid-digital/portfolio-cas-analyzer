@@ -18,31 +18,22 @@ type ParseResult = {
   warnings: string[]
 }
 
-const CATEGORY_TOKENS: Record<AssetCategory, RegExp> = {
-  Equity: /equity/i,
-  Debt: /debt/i,
-  Hybrid: /hybrid/i,
-  Gold: /gold/i,
-  Other: /./, // fallback
+type PdfTextItem = {
+  str: string
+  x: number
+  y: number
+  width: number
 }
 
-type DraftHolding = {
-  fundFamily: string
-  folio: string
-  schemeName: string
-  category: AssetCategory
-  units?: number
-  nav?: number
-  marketValue?: number
-  costValue?: number
-}
-
-const numberFromLine = (line: string) => {
-  const normalized = line.replace(/[^\d.\-]/g, '')
-  return normalized ? Number.parseFloat(normalized) : undefined
+type PdfLine = {
+  y: number
+  items: PdfTextItem[]
+  text: string
 }
 
 const tolerancePct = 0.02
+const Y_TOLERANCE = 1.5
+const X_GAP_THRESHOLD = 6
 
 export async function parseCasPdf(file: File): Promise<ParseResult> {
   const pdf = await loadPdf(file)
@@ -85,7 +76,7 @@ export function parseCasCsv(input: string): ParseResult {
       fundFamily: get('fundfamily') || 'Unknown Family',
       folio: get('folio') || 'N/A',
       schemeName: get('schemename'),
-      category: (normalizeCategory(get('category')) ?? 'Other') as AssetCategory,
+      category: inferCategory(get('category')),
       units: Number.isNaN(units) ? 0 : units,
       nav: Number.isNaN(nav) ? 0 : nav,
       marketValue: Number.isNaN(marketValue) ? 0 : marketValue,
@@ -101,174 +92,75 @@ export function parseCasCsv(input: string): ParseResult {
   }
 }
 
-function normalizeCategory(input: string): AssetCategory | null {
-  const value = input?.trim()
-  if (!value) return null
-  const match = (Object.keys(CATEGORY_TOKENS) as AssetCategory[]).find((category) =>
-    CATEGORY_TOKENS[category].test(value)
-  )
-  return match ?? 'Other'
-}
-
 async function loadPdf(file: File): Promise<PDFDocumentProxy> {
   const data = await file.arrayBuffer()
   return getDocument({ data }).promise
 }
 
-async function extractLines(pdf: PDFDocumentProxy): Promise<string[]> {
-  const lines: string[] = []
+async function extractLines(pdf: PDFDocumentProxy): Promise<PdfLine[]> {
+  const lineBuckets = new Map<number, PdfLine>()
+
   for (let pageNo = 1; pageNo <= pdf.numPages; pageNo += 1) {
     const page = await pdf.getPage(pageNo)
     const content = await page.getTextContent()
-    content.items.forEach((item) => {
-      const text = (item as { str?: string }).str?.trim()
-      if (text) {
-        lines.push(text)
+
+    content.items.forEach((item: any) => {
+      const raw = String(item.str ?? '').trim()
+      if (!raw) return
+
+      const transform: number[] = item.transform ?? []
+      const x = transform[4] ?? 0
+      const y = transform[5] ?? 0
+      const width = item.width ?? 0
+
+      const lineKey = Math.round(y / Y_TOLERANCE)
+      const bucket = lineBuckets.get(lineKey)
+
+      if (bucket) {
+        bucket.items.push({ str: raw, x, y, width })
+      } else {
+        lineBuckets.set(lineKey, {
+          y,
+          items: [{ str: raw, x, y, width }],
+          text: '',
+        })
       }
     })
   }
-  return lines
-}
 
-function parseCasLines(lines: string[], fileName?: string): ParseResult {
-  let currentCategory: AssetCategory = 'Other'
-  let currentFamily = ''
-  let currentFolio = ''
-  let draft: DraftHolding | null = null
-  const summaryTotals = {
-    marketValue: undefined as number | undefined,
-    costValue: undefined as number | undefined,
-  }
+  const lines = Array.from(lineBuckets.values()).map((line) => {
+    const sortedItems = [...line.items].sort((a, b) => a.x - b.x)
+    const textParts: string[] = []
 
-  const holdingsMap = new Map<string, DraftHolding>()
-  const warnings: string[] = []
-
-  const commitDraft = () => {
-    if (
-      draft &&
-      draft.schemeName &&
-      typeof draft.marketValue === 'number' &&
-      typeof draft.costValue === 'number'
-    ) {
-      const key = `${draft.fundFamily}|${draft.folio}|${draft.schemeName}`
-      holdingsMap.set(key, { ...draft })
-      draft = null
-    }
-  }
-
-  lines.forEach((line) => {
-    const normalized = line.replace(/\s+/g, ' ').trim()
-
-    // Category headers
-    const maybeCategory = (Object.keys(CATEGORY_TOKENS) as AssetCategory[]).find((category) =>
-      category !== 'Other' ? CATEGORY_TOKENS[category].test(normalized) : false
-    )
-    if (maybeCategory) {
-      currentCategory = maybeCategory
-      return
-    }
-
-    if (/mutual fund/i.test(normalized) || /fund house/i.test(normalized)) {
-      currentFamily = normalized.replace(/(mutual fund|fund house)/i, '').trim() || normalized
-      return
-    }
-
-    if (/folio/i.test(normalized)) {
-      const match =
-        normalized.match(/folio\s*(no\.?|number)?\s*[:\-]?\s*(.+)$/i)?.[2]?.trim() ?? normalized
-      currentFolio = match
-      return
-    }
-
-    if (/scheme/i.test(normalized) && !/summary/i.test(normalized)) {
-      commitDraft()
-      draft = {
-        fundFamily: currentFamily || 'Unknown Family',
-        folio: currentFolio || 'N/A',
-        schemeName: normalized.replace(/.*scheme\s*name[:\-]?\s*/i, '') || normalized,
-        category: currentCategory,
+    let prevRight = Number.NEGATIVE_INFINITY
+    sortedItems.forEach((item) => {
+      const gap = item.x - prevRight
+      if (gap > X_GAP_THRESHOLD) {
+        textParts.push(' ')
+      } else if (textParts.length && !textParts[textParts.length - 1].endsWith(' ')) {
+        textParts.push(' ')
       }
-      return
-    }
 
-    if (/closing units?/i.test(normalized)) {
-      draft ??= {
-        fundFamily: currentFamily || 'Unknown Family',
-        folio: currentFolio || 'N/A',
-        schemeName: `Scheme @ ${currentFolio || 'N/A'}`,
-        category: currentCategory,
-      }
-      draft.units = numberFromLine(normalized)
-      return
-    }
+      textParts.push(item.str)
+      prevRight = item.x + (item.width ?? 0)
+    })
 
-    if (/(nav|net asset value)/i.test(normalized)) {
-      draft ??= {
-        fundFamily: currentFamily || 'Unknown Family',
-        folio: currentFolio || 'N/A',
-        schemeName: `Scheme @ ${currentFolio || 'N/A'}`,
-        category: currentCategory,
-      }
-      draft.nav = numberFromLine(normalized)
-      return
-    }
-
-    if (/market value/i.test(normalized)) {
-      draft ??= {
-        fundFamily: currentFamily || 'Unknown Family',
-        folio: currentFolio || 'N/A',
-        schemeName: `Scheme @ ${currentFolio || 'N/A'}`,
-        category: currentCategory,
-      }
-      draft.marketValue = numberFromLine(normalized)
-      return
-    }
-
-    if (/cost value/i.test(normalized) || /invested amount/i.test(normalized)) {
-      draft ??= {
-        fundFamily: currentFamily || 'Unknown Family',
-        folio: currentFolio || 'N/A',
-        schemeName: `Scheme @ ${currentFolio || 'N/A'}`,
-        category: currentCategory,
-      }
-      draft.costValue = numberFromLine(normalized)
-      commitDraft()
-      return
-    }
-
-    if (/total\s+market\s+value/i.test(normalized)) {
-      summaryTotals.marketValue = numberFromLine(normalized)
-      return
-    }
-
-    if (/total\s+(cost|invested)/i.test(normalized)) {
-      summaryTotals.costValue = numberFromLine(normalized)
+    const text = textParts.join('').replace(/\s+/g, ' ').trim()
+    return {
+      ...line,
+      items: sortedItems,
+      text,
     }
   })
 
-  commitDraft()
+  return lines
+    .filter((line) => line.text.length > 0)
+    .sort((a, b) => b.y - a.y)
+}
 
-  const holdings = scrubHoldings(
-    Array.from(holdingsMap.entries())
-      .map(([key, value]) => ({
-        id: key,
-        fundFamily: value.fundFamily,
-        folio: value.folio,
-        schemeName: value.schemeName,
-        category: value.category,
-        units: value.units ?? 0,
-        nav: value.nav ?? 0,
-        marketValue: value.marketValue ?? 0,
-        costValue: value.costValue ?? 0,
-      }))
-      .filter(
-        (h): h is PortfolioHolding =>
-          typeof h.units === 'number' &&
-          typeof h.nav === 'number' &&
-          typeof h.marketValue === 'number' &&
-          typeof h.costValue === 'number'
-      )
-  )
+function parseCasLines(lines: PdfLine[], fileName?: string): ParseResult {
+  const warnings: string[] = []
+  const holdings = parseHoldings(lines, warnings)
 
   if (!holdings.length) {
     throw new Error(
@@ -277,28 +169,34 @@ function parseCasLines(lines: string[], fileName?: string): ParseResult {
   }
 
   const summary = summarizeHoldings(holdings)
-  if (
-    summaryTotals.marketValue &&
-    Math.abs(summaryTotals.marketValue - summary.totalMarketValue) / summaryTotals.marketValue >
-      tolerancePct
-  ) {
-    warnings.push(
-      `Market value differs from CAS summary by ${formatDifference(
-        summary.totalMarketValue - summaryTotals.marketValue
-      )}.`
-    )
-  }
+  const declaredTotals = parsePortfolioSummary(lines)
 
-  if (
-    summaryTotals.costValue &&
-    Math.abs(summaryTotals.costValue - summary.totalCostValue) / summaryTotals.costValue >
-      tolerancePct
-  ) {
-    warnings.push(
-      `Invested amount differs from CAS summary by ${formatDifference(
-        summary.totalCostValue - summaryTotals.costValue
-      )}.`
-    )
+  if (declaredTotals) {
+    const { totalMarketValue, totalCostValue } = declaredTotals
+
+    if (
+      totalMarketValue &&
+      Math.abs(totalMarketValue - summary.totalMarketValue) / totalMarketValue > tolerancePct
+    ) {
+      warnings.push(
+        `Market value differs from CAS summary by ${formatDifference(
+          summary.totalMarketValue - totalMarketValue
+        )}.`
+      )
+    }
+
+    if (
+      totalCostValue &&
+      Math.abs(totalCostValue - summary.totalCostValue) / totalCostValue > tolerancePct
+    ) {
+      warnings.push(
+        `Invested amount differs from CAS summary by ${formatDifference(
+          summary.totalCostValue - totalCostValue
+        )}.`
+      )
+    }
+  } else {
+    warnings.push('Unable to parse portfolio summary totals for validation.')
   }
 
   if (fileName && summary.holdingsCount > 50) {
@@ -310,6 +208,166 @@ function parseCasLines(lines: string[], fileName?: string): ParseResult {
     summary,
     warnings,
   }
+}
+
+function parsePortfolioSummary(
+  lines: PdfLine[]
+): { totalMarketValue?: number; totalCostValue?: number } | null {
+  const startIndex = lines.findIndex((line) => /portfolio summary/i.test(line.text))
+  if (startIndex === -1) return null
+
+  for (let i = startIndex + 1; i < lines.length; i += 1) {
+    const text = lines[i].text
+    if (!text || /date\s+transaction/i.test(text)) break
+    const totalMatch = text.match(/^Total\s+([\d,().-]+)\s+([\d,().-]+)$/i)
+    if (totalMatch) {
+      return {
+        totalCostValue: parseNumber(totalMatch[1]),
+        totalMarketValue: parseNumber(totalMatch[2]),
+      }
+    }
+  }
+
+  return null
+}
+
+function parseHoldings(lines: PdfLine[], warnings: string[]): PortfolioHolding[] {
+  const holdings: PortfolioHolding[] = []
+
+  let currentFund = ''
+  let currentFolio: { number: string; pan?: string } | null = null
+  let currentScheme: { name: string; isin?: string; category: AssetCategory } | null = null
+
+  const pushHolding = (closingLine: string) => {
+    if (!currentFund || !currentFolio || !currentScheme) {
+      warnings.push(
+        `Detected closing balance but missing context (fund: ${currentFund || '-'}, folio: ${
+          currentFolio?.number ?? '-'
+        }, scheme: ${currentScheme?.name ?? '-'})`
+      )
+      return
+    }
+
+    const units = extractLabelNumber(closingLine, 'Closing Unit Balance')
+    const nav = extractLabelNumber(closingLine, 'NAV')
+    const costValue = extractLabelNumber(closingLine, 'Total Cost Value')
+    const marketValue = extractLabelNumber(closingLine, 'Market Value')
+
+    if (
+      units === undefined ||
+      nav === undefined ||
+      costValue === undefined ||
+      marketValue === undefined
+    ) {
+      warnings.push(`Incomplete closing balance data for scheme "${currentScheme.name}".`)
+      return
+    }
+
+    const id = `${currentFund}|${currentFolio.number}|${currentScheme.name}|${currentScheme.isin ?? ''}`
+
+    holdings.push({
+      id,
+      fundFamily: currentFund,
+      folio: currentFolio.number,
+      schemeName: currentScheme.name,
+      category: currentScheme.category,
+      units,
+      nav,
+      costValue,
+      marketValue,
+    })
+
+    currentScheme = null
+  }
+
+  lines.forEach((line) => {
+    const text = line.text
+
+    if (isFundHeader(text)) {
+      currentFund = text.replace(/Mutual Fund/i, '').trim() || text.trim()
+      return
+    }
+
+    if (text.includes('Folio No')) {
+      currentFolio = {
+        number: extractFolioNumber(text) ?? 'Unknown Folio',
+        pan: extractPan(text),
+      }
+      return
+    }
+
+    if (text.includes('ISIN')) {
+      currentScheme = parseSchemeLine(text)
+      return
+    }
+
+    if (/Closing Unit Balance/i.test(text)) {
+      pushHolding(text)
+      return
+    }
+  })
+
+  return scrubHoldings(holdings)
+}
+
+function isFundHeader(text: string) {
+  return /Mutual Fund$/i.test(text.trim()) && !/PORTFOLIO SUMMARY/i.test(text)
+}
+
+function extractFolioNumber(text: string) {
+  const match = text.match(/Folio No:\s*([^|]+)/i)
+  return match ? match[1].trim() : null
+}
+
+function extractPan(text: string) {
+  const match = text.match(/PAN:\s*([A-Z0-9]+)/i)
+  return match ? match[1].trim() : undefined
+}
+
+function parseSchemeLine(text: string) {
+  const [rawName] = text.split(/ISIN:/i)
+  const schemeName = cleanSchemeName(rawName ?? text)
+  const isinMatch = text.match(/ISIN:\s*([A-Z0-9]+)/i)
+  return {
+    name: schemeName,
+    isin: isinMatch?.[1],
+    category: inferCategory(schemeName),
+  }
+}
+
+function cleanSchemeName(raw: string) {
+  const trimmed = raw.replace(/\s+/g, ' ').trim()
+  const withoutCode = trimmed.replace(/^[A-Z0-9]+\s*[-–]\s*/i, '')
+  return withoutCode || trimmed
+}
+
+function inferCategory(value?: string | null): AssetCategory {
+  const name = value?.toLowerCase() ?? ''
+  if (/gold/.test(name)) return 'Gold'
+  if (/(liquid|overnight|income|bond|gilt|debt|money market)/.test(name)) return 'Debt'
+  if (/(hybrid|balanced|asset allocator|multi asset)/.test(name)) return 'Hybrid'
+  if (/(equity|large cap|midcap|small cap|flexi|value|focused|elss|tax saver)/.test(name))
+    return 'Equity'
+  return 'Other'
+}
+
+function extractLabelNumber(text: string, label: string) {
+  const regex = new RegExp(`${label}\\s*:?\\s*(?:INR\\s*)?([\\d,().-]+)`, 'i')
+  const match = text.match(regex)
+  return match ? parseNumber(match[1]) : undefined
+}
+
+function parseNumber(raw?: string) {
+  if (!raw) return undefined
+  const trimmed = raw.trim()
+  if (!trimmed) return undefined
+
+  const negative = trimmed.startsWith('(') && trimmed.endsWith(')')
+  const normalized = trimmed.replace(/[(),\s]/g, '')
+  if (!normalized) return undefined
+
+  const value = Number.parseFloat(normalized)
+  return negative ? -value : value
 }
 
 function scrubHoldings(holdings: PortfolioHolding[]): PortfolioHolding[] {
