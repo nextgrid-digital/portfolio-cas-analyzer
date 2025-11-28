@@ -1,9 +1,16 @@
 import type {
+  AssetCategory,
   FundFamilySlice,
   PortfolioHolding,
   PortfolioHoldingView,
   PortfolioMetrics,
 } from '@/features/portfolio/types'
+
+export type CategorySlice = {
+  category: AssetCategory
+  marketValue: number
+  allocationPercent: number
+}
 
 export function enrichHoldings(
   holdings: PortfolioHolding[],
@@ -39,12 +46,26 @@ export function calculateMetrics(holdings: PortfolioHolding[]): PortfolioMetrics
   const gainLossValue = totalMarketValue - totalCostValue
   const gainLossPercent = totalCostValue ? (gainLossValue / totalCostValue) * 100 : 0
 
+  // Calculate simplified XIRR (average return across holdings)
+  // This is a simplified version - true XIRR requires cash flow dates
+  let totalReturn = 0
+  let validHoldings = 0
+  holdings.forEach((holding) => {
+    if (holding.costValue > 0) {
+      const holdingReturn = ((holding.marketValue - holding.costValue) / holding.costValue) * 100
+      totalReturn += holdingReturn
+      validHoldings += 1
+    }
+  })
+  const xirr = validHoldings > 0 ? totalReturn / validHoldings : undefined
+
   return {
     totalMarketValue,
     totalCostValue,
     gainLossValue,
     gainLossPercent,
     holdingsCount: holdings.length,
+    xirr,
   }
 }
 
@@ -62,6 +83,26 @@ export function buildFundFamilySlices(
       fundFamily,
       marketValue,
       allocationPercent: totalMarketValue ? (marketValue / totalMarketValue) * 100 : 0,
+    }))
+    .sort((a, b) => b.marketValue - a.marketValue)
+}
+
+export function buildCategorySlices(
+  holdings: PortfolioHolding[],
+  totalMarketValue: number
+): CategorySlice[] {
+  const map = new Map<AssetCategory, number>()
+  holdings.forEach((holding) => {
+    map.set(holding.category, (map.get(holding.category) ?? 0) + holding.marketValue)
+  })
+
+  const categoryOrder: AssetCategory[] = ['Equity', 'Debt', 'Hybrid', 'Gold', 'Other']
+  return categoryOrder
+    .filter((cat) => map.has(cat))
+    .map((category) => ({
+      category,
+      marketValue: map.get(category) ?? 0,
+      allocationPercent: totalMarketValue ? ((map.get(category) ?? 0) / totalMarketValue) * 100 : 0,
     }))
     .sort((a, b) => b.marketValue - a.marketValue)
 }

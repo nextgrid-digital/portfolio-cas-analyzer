@@ -30,6 +30,7 @@ export type PortfolioMetrics = {
   gainLossValue: number
   gainLossPercent: number
   holdingsCount: number
+  xirr?: number // Portfolio XIRR (money-weighted return)
 }
 
 export type PortfolioAnalysis = {

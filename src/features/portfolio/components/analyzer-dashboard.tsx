@@ -7,7 +7,7 @@ import {
   getSortedRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import { AlertCircle, AlertTriangle, Download, FileDown, History, Loader2, Trash2, Upload } from 'lucide-react'
+import { AlertCircle, AlertTriangle, ChevronDown, Download, FileDown, History, Loader2, RotateCcw, Trash2, Upload } from 'lucide-react'
 import { DataTableColumnHeader, DataTablePagination } from '@/components/data-table'
 import { Button } from '@/components/ui/button'
 import {
@@ -21,10 +21,13 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { buildCategorySlices, type CategorySlice } from '@/lib/portfolio-metrics'
 import { usePortfolioStore, type PortfolioStatus } from '../use-portfolio-store'
 import type {
   CategoryFilter,
@@ -32,7 +35,7 @@ import type {
   PortfolioAnalysis,
   PortfolioHoldingView,
 } from '../types'
-import { ASSET_CATEGORIES } from '../constants'
+import { ASSET_CATEGORIES, SAMPLE_CSV_DATA } from '../constants'
 
 const currency = new Intl.NumberFormat('en-IN', {
   style: 'currency',
@@ -45,6 +48,7 @@ const decimal = new Intl.NumberFormat('en-IN', {
 
 export function AnalyzerDashboard() {
   const inputRef = useRef<HTMLInputElement>(null)
+  const [resetDialogOpen, setResetDialogOpen] = useState(false)
   const status = usePortfolioStore((state) => state.status)
   const statusMessage = usePortfolioStore((state) => state.statusMessage)
   const error = usePortfolioStore((state) => state.error)
@@ -61,6 +65,14 @@ export function AnalyzerDashboard() {
     if (categoryFilter === 'All') return holdingsView
     return holdingsView.filter((holding) => holding.category === categoryFilter)
   }, [categoryFilter, holdingsView])
+
+  const categorySlices = useMemo(() => {
+    if (!currentAnalysis) return []
+    return buildCategorySlices(
+      currentAnalysis.holdings,
+      currentAnalysis.metrics.totalMarketValue
+    )
+  }, [currentAnalysis])
 
   const columns = useMemo<ColumnDef<PortfolioHoldingView>[]>(
     () => [
@@ -91,8 +103,34 @@ export function AnalyzerDashboard() {
       },
       {
         accessorKey: 'category',
-        header: 'Category',
-        cell: ({ row }) => <Badge variant='outline'>{row.original.category}</Badge>,
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title='Category' />
+        ),
+        cell: ({ row }) => {
+          const category = row.original.category
+          const variantMap: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
+            Equity: 'default',
+            Debt: 'secondary',
+            Hybrid: 'outline',
+            Gold: 'default',
+            Other: 'outline',
+          }
+          const colorMap: Record<string, string> = {
+            Equity: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
+            Debt: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+            Hybrid: 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400',
+            Gold: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400',
+            Other: 'bg-gray-100 text-gray-700 dark:bg-gray-900/30 dark:text-gray-400',
+          }
+          return (
+            <Badge
+              variant={variantMap[category] || 'outline'}
+              className={cn('text-xs font-semibold uppercase', colorMap[category])}
+            >
+              {category}
+            </Badge>
+          )
+        },
       },
       {
         accessorKey: 'units',
@@ -173,20 +211,6 @@ export function AnalyzerDashboard() {
 
   return (
     <div className='space-y-6 px-4 py-6 lg:px-8'>
-      <header className='space-y-2'>
-        <Card className='border-primary/20 bg-gradient-to-br from-cyan-900/70 via-primary/20 to-background text-primary-foreground overflow-hidden'>
-          <CardHeader className='space-y-1'>
-            <CardTitle className='text-2xl font-semibold'>
-              MF Portfolio CAS Analyzer
-            </CardTitle>
-            <CardDescription className='text-primary-foreground/80'>
-              Convert CAMS / KFintech CAS PDFs into actionable, client-ready insights without
-              uploading data to a server.
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      </header>
-
       <section className='grid gap-4 lg:grid-cols-3'>
         <UploadPanel inputRef={inputRef} status={status} statusMessage={statusMessage} error={error} />
         <HistoryPanel
@@ -199,17 +223,32 @@ export function AnalyzerDashboard() {
       </section>
 
       {warnings.length > 0 && (
-        <Alert className='border-yellow-500/50 bg-yellow-50 dark:bg-yellow-950/20'>
-          <AlertTriangle className='size-4 text-yellow-600 dark:text-yellow-500' />
-          <AlertTitle>Validation warnings</AlertTitle>
-          <AlertDescription>
-            <ul className='list-disc pl-4 space-y-1'>
-              {warnings.map((warning) => (
-                <li key={warning}>{warning}</li>
-              ))}
-            </ul>
-          </AlertDescription>
-        </Alert>
+        <Collapsible defaultOpen={warnings.length <= 3}>
+          <Alert className='border-yellow-500/50 bg-yellow-50 dark:bg-yellow-950/20'>
+            <AlertTriangle className='size-4 text-yellow-600 dark:text-yellow-500' />
+            <div className='flex-1'>
+              <CollapsibleTrigger className='flex w-full items-center justify-between'>
+                <AlertTitle>
+                  Validation warnings ({warnings.length})
+                </AlertTitle>
+                <ChevronDown className='size-4 transition-transform duration-200 group-data-[state=open]:rotate-180' />
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <AlertDescription className='mt-2'>
+                  <ScrollArea className={cn('w-full', warnings.length > 5 && 'max-h-48')}>
+                    <ul className='list-disc space-y-1.5 pl-5 text-sm'>
+                      {warnings.map((warning, idx) => (
+                        <li key={`${warning}-${idx}`} className='text-left'>
+                          {warning}
+                        </li>
+                      ))}
+                    </ul>
+                  </ScrollArea>
+                </AlertDescription>
+              </CollapsibleContent>
+            </div>
+          </Alert>
+        </Collapsible>
       )}
 
       <MetricsSummary status={status} analysis={currentAnalysis} />
@@ -245,6 +284,15 @@ export function AnalyzerDashboard() {
               <Button variant='outline' size='sm' onClick={actions.exportCsv} disabled={!currentAnalysis}>
                 <Download className='mr-2 size-4' />
                 Export CSV
+              </Button>
+              <Button
+                variant='outline'
+                size='sm'
+                onClick={() => setResetDialogOpen(true)}
+                disabled={!currentAnalysis && savedAnalyses.length === 0}
+              >
+                <RotateCcw className='mr-2 size-4' />
+                Reset
               </Button>
             </div>
           </CardHeader>
@@ -301,8 +349,29 @@ export function AnalyzerDashboard() {
           </CardContent>
         </Card>
 
-        <FundFamilyBreakdown slices={fundFamilySlices} />
+        <section className='grid gap-4 lg:grid-cols-2'>
+          <FundFamilyBreakdown slices={fundFamilySlices} />
+          <CategoryAllocation slices={categorySlices} />
+        </section>
+
+        {currentAnalysis && holdingsView.length > 0 && (
+          <TopHoldings holdings={holdingsView} />
+        )}
       </section>
+
+      <ConfirmDialog
+        open={resetDialogOpen}
+        onOpenChange={setResetDialogOpen}
+        title='Reset Portfolio Analyzer'
+        desc='This will clear all current analysis and saved history. This action cannot be undone.'
+        confirmText='Reset'
+        destructive
+        handleConfirm={() => {
+          actions.clearHistory()
+          setResetDialogOpen(false)
+          toast.success('Portfolio analyzer reset successfully.')
+        }}
+      />
     </div>
   )
 }
@@ -421,7 +490,17 @@ function UploadPanel({ inputRef, status, statusMessage, error }: UploadPanelProp
             className='mt-3 min-h-[120px]'
             placeholder='fundFamily,folio,schemeName,category,units,nav,marketValue,costValue'
           />
-          <div className='mt-3 flex justify-end'>
+          <div className='mt-3 flex justify-between'>
+            <Button
+              size='sm'
+              variant='outline'
+              onClick={() => {
+                setCsvInput(SAMPLE_CSV_DATA)
+                toast.info('Sample data loaded. Click "Parse CSV" to analyze.')
+              }}
+            >
+              Load Sample
+            </Button>
             <Button
               size='sm'
               onClick={() => {
@@ -537,12 +616,18 @@ function MetricsSummary({ status, analysis }: MetricsProps) {
       positive: (metrics?.gainLossValue ?? 0) >= 0,
     },
     {
+      label: 'Portfolio XIRR',
+      value: metrics?.xirr !== undefined ? `${decimal.format(metrics.xirr)}%` : '—',
+      trend: metrics?.xirr !== undefined ? 'Money-weighted return' : undefined,
+      positive: (metrics?.xirr ?? 0) >= 0,
+    },
+    {
       label: 'Active Holdings',
       value: metrics ? decimal.format(metrics.holdingsCount) : '—',
     },
   ]
   return (
-    <section className='grid gap-4 md:grid-cols-2 lg:grid-cols-4'>
+    <section className='grid gap-4 md:grid-cols-2 lg:grid-cols-5'>
       {cards.map((card) => (
         <Card key={card.label}>
           <CardHeader className='pb-2'>
@@ -611,6 +696,109 @@ function FundFamilyBreakdown({ slices }: BreakdownProps) {
             ))}
           </div>
         )}
+      </CardContent>
+    </Card>
+  )
+}
+
+type CategoryAllocationProps = {
+  slices: CategorySlice[]
+}
+
+function CategoryAllocation({ slices }: CategoryAllocationProps) {
+  const getCategoryColor = (category: string) => {
+    switch (category) {
+      case 'Equity':
+        return 'bg-emerald-500'
+      case 'Debt':
+        return 'bg-blue-500'
+      case 'Hybrid':
+        return 'bg-orange-500'
+      case 'Gold':
+        return 'bg-yellow-500'
+      default:
+        return 'bg-gray-500'
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Category Allocation</CardTitle>
+        <CardDescription>Portfolio breakdown by asset category.</CardDescription>
+      </CardHeader>
+      <CardContent className='space-y-4'>
+        {slices.length === 0 ? (
+          <p className='text-sm text-muted-foreground'>
+            Upload a CAS to see allocation by category.
+          </p>
+        ) : (
+          <div className='space-y-4'>
+            {slices.map((slice) => (
+              <div key={slice.category} className='space-y-1'>
+                <div className='flex items-center justify-between text-sm'>
+                  <span className='font-medium'>{slice.category}</span>
+                  <span>{decimal.format(slice.allocationPercent)}%</span>
+                </div>
+                <div className='h-2 rounded-full bg-muted'>
+                  <div
+                    className={cn('h-2 rounded-full', getCategoryColor(slice.category))}
+                    style={{ width: `${slice.allocationPercent}%` }}
+                  />
+                </div>
+                <div className='text-xs text-muted-foreground'>
+                  {currency.format(slice.marketValue)}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+type TopHoldingsProps = {
+  holdings: PortfolioHoldingView[]
+}
+
+function TopHoldings({ holdings }: TopHoldingsProps) {
+  const topHoldings = useMemo(() => {
+    return [...holdings]
+      .sort((a, b) => b.marketValue - a.marketValue)
+      .slice(0, 5)
+  }, [holdings])
+
+  if (topHoldings.length === 0) return null
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Top Holdings</CardTitle>
+        <CardDescription>Top 5 holdings by market value.</CardDescription>
+      </CardHeader>
+      <CardContent className='space-y-3'>
+        {topHoldings.map((holding, idx) => (
+          <div key={holding.id} className='space-y-1'>
+            <div className='flex items-start justify-between text-sm'>
+              <div className='flex-1 min-w-0'>
+                <div className='flex items-center gap-2'>
+                  <span className='font-semibold text-muted-foreground'>#{idx + 1}</span>
+                  <span className='font-medium truncate'>{holding.schemeName}</span>
+                </div>
+                <div className='text-xs text-muted-foreground mt-0.5'>
+                  {holding.fundFamily}
+                </div>
+              </div>
+              <div className='text-right ml-2'>
+                <div className='font-semibold'>{currency.format(holding.marketValue)}</div>
+                <div className='text-xs text-muted-foreground'>
+                  {decimal.format(holding.allocationPercent)}%
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
       </CardContent>
     </Card>
   )
