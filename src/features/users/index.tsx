@@ -1,4 +1,3 @@
-import { getRouteApi } from '@tanstack/react-router'
 import { ConfigDrawer } from '@/components/config-drawer'
 import { Header } from '@/components/layout/header'
 import { Main } from '@/components/layout/main'
@@ -11,11 +10,11 @@ import { UsersProvider } from './components/users-provider'
 import { UsersTable } from './components/users-table'
 import { users } from './data/users'
 
-const route = getRouteApi('/_authenticated/users/')
+// const route = getRouteApi('/_authenticated/users/') // Route no longer exists
 
 export function Users() {
-  const search = route.useSearch()
-  const navigate = route.useNavigate()
+  const search = {} as never
+  const navigate = (() => {}) as never
 
   return (
     <UsersProvider>

@@ -1,5 +1,4 @@
 import { type ChangeEvent, useState } from 'react'
-import { getRouteApi } from '@tanstack/react-router'
 import { SlidersHorizontal, ArrowUpAZ, ArrowDownAZ } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,7 +18,7 @@ import { Search } from '@/components/search'
 import { ThemeSwitch } from '@/components/theme-switch'
 import { apps } from './data/apps'
 
-const route = getRouteApi('/_authenticated/apps/')
+// const route = getRouteApi('/_authenticated/apps/') // Route no longer exists
 
 type AppType = 'all' | 'connected' | 'notConnected'
 
@@ -30,16 +29,10 @@ const appText = new Map<AppType, string>([
 ])
 
 export function Apps() {
-  const {
-    filter = '',
-    type = 'all',
-    sort: initSort = 'asc',
-  } = route.useSearch()
-  const navigate = route.useNavigate()
-
-  const [sort, setSort] = useState(initSort)
-  const [appType, setAppType] = useState(type)
-  const [searchTerm, setSearchTerm] = useState(filter)
+  const navigate = useNavigate()
+  const [sort, setSort] = useState<'asc' | 'desc'>('asc')
+  const [appType, setAppType] = useState<AppType>('all')
+  const [searchTerm, setSearchTerm] = useState('')
 
   const filteredApps = apps
     .sort((a, b) =>
@@ -58,27 +51,14 @@ export function Apps() {
 
   const handleSearch = (e: ChangeEvent<HTMLInputElement>) => {
     setSearchTerm(e.target.value)
-    navigate({
-      search: (prev) => ({
-        ...prev,
-        filter: e.target.value || undefined,
-      }),
-    })
   }
 
   const handleTypeChange = (value: AppType) => {
     setAppType(value)
-    navigate({
-      search: (prev) => ({
-        ...prev,
-        type: value === 'all' ? undefined : value,
-      }),
-    })
   }
 
   const handleSortChange = (sort: 'asc' | 'desc') => {
     setSort(sort)
-    navigate({ search: (prev) => ({ ...prev, sort }) })
   }
 
   return (
@@ -111,7 +91,7 @@ export function Apps() {
               value={searchTerm}
               onChange={handleSearch}
             />
-            <Select value={appType} onValueChange={handleTypeChange}>
+            <Select value={appType} onValueChange={(value) => handleTypeChange(value as AppType)}>
               <SelectTrigger className='w-36'>
                 <SelectValue>{appText.get(appType)}</SelectValue>
               </SelectTrigger>

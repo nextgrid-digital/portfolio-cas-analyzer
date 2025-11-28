@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { getRouteApi } from '@tanstack/react-router'
 import {
+  type ColumnFiltersState,
+  type PaginationState,
   type SortingState,
   type VisibilityState,
   flexRender,
@@ -13,7 +14,6 @@ import {
   useReactTable,
 } from '@tanstack/react-table'
 import { cn } from '@/lib/utils'
-import { useTableUrlState } from '@/hooks/use-table-url-state'
 import {
   Table,
   TableBody,
@@ -28,7 +28,7 @@ import { type Task } from '../data/schema'
 import { DataTableBulkActions } from './data-table-bulk-actions'
 import { tasksColumns as columns } from './tasks-columns'
 
-const route = getRouteApi('/_authenticated/tasks/')
+// const route = getRouteApi('/_authenticated/tasks/') // Route no longer exists
 
 type DataTableProps = {
   data: Task[]
@@ -45,25 +45,11 @@ export function TasksTable({ data }: DataTableProps) {
   // const [columnFilters, onColumnFiltersChange] = useState<ColumnFiltersState>([])
   // const [pagination, onPaginationChange] = useState<PaginationState>({ pageIndex: 0, pageSize: 10 })
 
-  // Synced with URL states (updated to match route search schema defaults)
-  const {
-    globalFilter,
-    onGlobalFilterChange,
-    columnFilters,
-    onColumnFiltersChange,
-    pagination,
-    onPaginationChange,
-    ensurePageInRange,
-  } = useTableUrlState({
-    search: route.useSearch(),
-    navigate: route.useNavigate(),
-    pagination: { defaultPage: 1, defaultPageSize: 10 },
-    globalFilter: { enabled: true, key: 'filter' },
-    columnFilters: [
-      { columnId: 'status', searchKey: 'status', type: 'array' },
-      { columnId: 'priority', searchKey: 'priority', type: 'array' },
-    ],
-  })
+  // Local state (route no longer exists)
+  const [globalFilter, onGlobalFilterChange] = useState('')
+  const [columnFilters, onColumnFiltersChange] = useState<ColumnFiltersState>([])
+  const [pagination, onPaginationChange] = useState<PaginationState>({ pageIndex: 0, pageSize: 10 })
+  const ensurePageInRange = () => {} // No-op
 
   // eslint-disable-next-line react-hooks/incompatible-library
   const table = useReactTable({
