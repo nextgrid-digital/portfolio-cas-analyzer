@@ -2,7 +2,6 @@ import workerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import {
   GlobalWorkerOptions,
   type PDFDocumentProxy,
-  type TextItem,
   getDocument,
 } from 'pdfjs-dist'
 import { PORTFOLIO_THRESHOLD } from '@/features/portfolio/constants'
@@ -122,7 +121,7 @@ async function extractLines(pdf: PDFDocumentProxy): Promise<string[]> {
     const page = await pdf.getPage(pageNo)
     const content = await page.getTextContent()
     content.items.forEach((item) => {
-      const text = (item as TextItem).str?.trim()
+      const text = (item as { str?: string }).str?.trim()
       if (text) {
         lines.push(text)
       }
@@ -250,10 +249,25 @@ function parseCasLines(lines: string[], fileName?: string): ParseResult {
   commitDraft()
 
   const holdings = scrubHoldings(
-    Array.from(holdingsMap.entries()).map(([key, value]) => ({
-      id: key,
-      ...value,
-    }))
+    Array.from(holdingsMap.entries())
+      .map(([key, value]) => ({
+        id: key,
+        fundFamily: value.fundFamily,
+        folio: value.folio,
+        schemeName: value.schemeName,
+        category: value.category,
+        units: value.units ?? 0,
+        nav: value.nav ?? 0,
+        marketValue: value.marketValue ?? 0,
+        costValue: value.costValue ?? 0,
+      }))
+      .filter(
+        (h): h is PortfolioHolding =>
+          typeof h.units === 'number' &&
+          typeof h.nav === 'number' &&
+          typeof h.marketValue === 'number' &&
+          typeof h.costValue === 'number'
+      )
   )
 
   if (!holdings.length) {

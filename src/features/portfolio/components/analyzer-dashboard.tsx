@@ -199,8 +199,8 @@ export function AnalyzerDashboard() {
       </section>
 
       {warnings.length > 0 && (
-        <Alert variant='warning'>
-          <AlertTriangle className='size-4' />
+        <Alert className='border-yellow-500/50 bg-yellow-50 dark:bg-yellow-950/20'>
+          <AlertTriangle className='size-4 text-yellow-600 dark:text-yellow-500' />
           <AlertTitle>Validation warnings</AlertTitle>
           <AlertDescription>
             <ul className='list-disc pl-4 space-y-1'>
@@ -212,7 +212,7 @@ export function AnalyzerDashboard() {
         </Alert>
       )}
 
-      <MetricsSummary status={status} analysis={currentAnalysis} onExport={actions.exportCsv} />
+      <MetricsSummary status={status} analysis={currentAnalysis} />
 
       <section className='grid gap-4 lg:grid-cols-3'>
         <Card className='lg:col-span-2'>
@@ -308,7 +308,7 @@ export function AnalyzerDashboard() {
 }
 
 type UploadPanelProps = {
-  inputRef: React.RefObject<HTMLInputElement>
+  inputRef: React.RefObject<HTMLInputElement | null>
   status: PortfolioStatus
   statusMessage?: string
   error?: string
@@ -517,10 +517,9 @@ function HistoryPanel({ analyses, selectedId, onSelect, onDelete, onClear }: His
 type MetricsProps = {
   status: PortfolioStatus
   analysis: PortfolioAnalysis | null
-  onExport: () => void
 }
 
-function MetricsSummary({ status, analysis, onExport }: MetricsProps) {
+function MetricsSummary({ status, analysis }: MetricsProps) {
   const metrics = analysis?.metrics
   const cards = [
     {

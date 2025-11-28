@@ -30,7 +30,7 @@ export function ForgotPassword() {
           <p className='text-muted-foreground mx-auto px-8 text-center text-sm text-balance'>
             Don't have an account?{' '}
             <Link
-              to='/sign-up'
+              to='/'
               className='hover:text-primary underline underline-offset-4'
             >
               Sign up
