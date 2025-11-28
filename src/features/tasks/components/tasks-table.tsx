@@ -49,7 +49,7 @@ export function TasksTable({ data }: DataTableProps) {
   const [globalFilter, onGlobalFilterChange] = useState('')
   const [columnFilters, onColumnFiltersChange] = useState<ColumnFiltersState>([])
   const [pagination, onPaginationChange] = useState<PaginationState>({ pageIndex: 0, pageSize: 10 })
-  const ensurePageInRange = () => {} // No-op
+  const ensurePageInRange = (_pageCount?: number) => {} // No-op
 
   // eslint-disable-next-line react-hooks/incompatible-library
   const table = useReactTable({

@@ -29,7 +29,6 @@ const appText = new Map<AppType, string>([
 ])
 
 export function Apps() {
-  const navigate = useNavigate()
   const [sort, setSort] = useState<'asc' | 'desc'>('asc')
   const [appType, setAppType] = useState<AppType>('all')
   const [searchTerm, setSearchTerm] = useState('')
