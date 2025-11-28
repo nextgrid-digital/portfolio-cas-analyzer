@@ -26,6 +26,7 @@ type PdfTextItem = {
 }
 
 type PdfLine = {
+  page: number
   y: number
   items: PdfTextItem[]
   text: string
@@ -98,11 +99,12 @@ async function loadPdf(file: File): Promise<PDFDocumentProxy> {
 }
 
 async function extractLines(pdf: PDFDocumentProxy): Promise<PdfLine[]> {
-  const lineBuckets = new Map<number, PdfLine>()
+  const pageLines: PdfLine[] = []
 
   for (let pageNo = 1; pageNo <= pdf.numPages; pageNo += 1) {
     const page = await pdf.getPage(pageNo)
     const content = await page.getTextContent()
+    const lineBuckets = new Map<number, PdfLine>()
 
     content.items.forEach((item: any) => {
       const raw = String(item.str ?? '').trim()
@@ -120,42 +122,47 @@ async function extractLines(pdf: PDFDocumentProxy): Promise<PdfLine[]> {
         bucket.items.push({ str: raw, x, y, width })
       } else {
         lineBuckets.set(lineKey, {
+          page: pageNo,
           y,
           items: [{ str: raw, x, y, width }],
           text: '',
         })
       }
     })
-  }
 
-  const lines = Array.from(lineBuckets.values()).map((line) => {
-    const sortedItems = [...line.items].sort((a, b) => a.x - b.x)
-    const textParts: string[] = []
+    const lines = Array.from(lineBuckets.values()).map((line) => {
+      const sortedItems = [...line.items].sort((a, b) => a.x - b.x)
+      const textParts: string[] = []
 
-    let prevRight = Number.NEGATIVE_INFINITY
-    sortedItems.forEach((item) => {
-      const gap = item.x - prevRight
-      if (gap > X_GAP_THRESHOLD) {
-        textParts.push(' ')
-      } else if (textParts.length && !textParts[textParts.length - 1].endsWith(' ')) {
-        textParts.push(' ')
+      let prevRight = Number.NEGATIVE_INFINITY
+      sortedItems.forEach((item) => {
+        const gap = item.x - prevRight
+        if (gap > X_GAP_THRESHOLD) {
+          textParts.push(' ')
+        } else if (textParts.length && !textParts[textParts.length - 1].endsWith(' ')) {
+          textParts.push(' ')
+        }
+
+        textParts.push(item.str)
+        prevRight = item.x + (item.width ?? 0)
+      })
+
+      const text = textParts.join('').replace(/\s+/g, ' ').trim()
+      return {
+        ...line,
+        items: sortedItems,
+        text,
       }
-
-      textParts.push(item.str)
-      prevRight = item.x + (item.width ?? 0)
     })
 
-    const text = textParts.join('').replace(/\s+/g, ' ').trim()
-    return {
-      ...line,
-      items: sortedItems,
-      text,
-    }
-  })
+    const sorted = lines
+      .filter((line) => line.text.length > 0)
+      .sort((a, b) => b.y - a.y) // PDF y: higher value = upper on page
 
-  return lines
-    .filter((line) => line.text.length > 0)
-    .sort((a, b) => b.y - a.y)
+    pageLines.push(...sorted)
+  }
+
+  return pageLines
 }
 
 function parseCasLines(lines: PdfLine[], fileName?: string): ParseResult {
@@ -280,12 +287,13 @@ function parseHoldings(lines: PdfLine[], warnings: string[]): PortfolioHolding[]
     currentScheme = null
   }
 
-  lines.forEach((line) => {
-    const text = line.text
+  for (let i = 0; i < lines.length; i += 1) {
+    const text = lines[i].text
+    if (!text) continue
 
     if (isFundHeader(text)) {
       currentFund = text.replace(/Mutual Fund/i, '').trim() || text.trim()
-      return
+      continue
     }
 
     if (text.includes('Folio No')) {
@@ -293,19 +301,43 @@ function parseHoldings(lines: PdfLine[], warnings: string[]): PortfolioHolding[]
         number: extractFolioNumber(text) ?? 'Unknown Folio',
         pan: extractPan(text),
       }
-      return
+      continue
     }
 
     if (text.includes('ISIN')) {
+      if (currentScheme) {
+        warnings.push(`Scheme "${currentScheme.name}" missing closing balance in folio ${currentFolio?.number ?? '-'}.`)
+      }
       currentScheme = parseSchemeLine(text)
-      return
+      continue
     }
 
     if (/Closing Unit Balance/i.test(text)) {
-      pushHolding(text)
-      return
+      let closingText = text
+      let lookahead = i + 1
+      while (lookahead < lines.length) {
+        const peek = lines[lookahead].text
+        if (!peek) {
+          lookahead += 1
+          continue
+        }
+        if (isFundHeader(peek) || peek.includes('Folio No') || peek.includes('ISIN')) break
+        if (/Total Cost Value/i.test(peek) || /Market Value/i.test(peek) || /NAV/i.test(peek)) {
+          closingText += ' ' + peek
+          lookahead += 1
+          continue
+        }
+        if (/Entry Load/i.test(peek) || /Exit Load/i.test(peek) || /Nominee/i.test(peek)) {
+          closingText += ' ' + peek
+          lookahead += 1
+          continue
+        }
+        break
+      }
+      pushHolding(closingText)
+      continue
     }
-  })
+  }
 
   return scrubHoldings(holdings)
 }
@@ -352,7 +384,10 @@ function inferCategory(value?: string | null): AssetCategory {
 }
 
 function extractLabelNumber(text: string, label: string) {
-  const regex = new RegExp(`${label}\\s*:?\\s*(?:INR\\s*)?([\\d,().-]+)`, 'i')
+  const regex = new RegExp(
+    `${label}\\b[^\\d()-]*:?\\s*(?:INR\\s*)?([\\d,().-]+)`,
+    'i'
+  )
   const match = text.match(regex)
   return match ? parseNumber(match[1]) : undefined
 }
